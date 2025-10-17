@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>智能PCB图像处理工作台</title>
+  <!-- FAVICON START -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='15' fill='%23004D40'/%3E%3Cg fill='%23FFD700'%3E%3Ccircle cx='20' cy='20' r='10'/%3E%3Ccircle cx='80' cy='20' r='10'/%3E%3Ccircle cx='20' cy='80' r='10'/%3E%3Ccircle cx='80' cy='80' r='10'/%3E%3C/g%3E%3Cpath d='M 20 50 Q 50 20, 80 50' stroke='%23FFF9C4' stroke-width='8' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
+  <!-- FAVICON END -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <style>
+    .fade { transition: opacity 0.5s ease; }
+    .color-picker {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 0 2px rgba(0,0,0,0.5);
+    }
+    .color-picker.selected {
+      border-color: #000;
+      transform: scale(1.1);
+    }
+    .slider-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .slider-value { min-width: 40px; text-align: center; }
+    .brush-size-selector { margin-top: 8px; }
+    .brush-size-label { font-size: 14px; margin-right: 8px; }
+    .brush-size-input { width: 60px; padding: 2px; }
+    .region-mode { background-color: #e2f0fd !important; }
+    .tool-button {
+      cursor: pointer;
+      border: 1px solid #ccc;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-right: 4px;
+    }
+    .tool-button.active {
+      background-color: #2563eb;
+      color: white;
+      border-color: #2563eb;
+    }
+    .tool-button:disabled, button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .path-preview {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    @media (max-width: 768px) {
+      .container { padding: 20px; }
+      .canvas-container { width: 100%; }
+    }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-900 font-sans p-6">
+  <div class="max-w-6xl mx-auto space-y-6 container">
+    <h1 class="text-3xl font-bold text-center">智能PCB图像处理工作台</h1>
+
+    <!-- 上传区域 -->
+    <div id="drop-area" class="border-2 border-dashed border-blue-400 rounded-lg p-6 bg-white text-center cursor-pointer">
+      <p class="text-lg">点击或拖拽图片到此</p>
+      <input type="file" id="uploader" accept="image/*" class="hidden">
+      <div id="img-info" class="text-sm text-gray-600 mt-2"></div>
+    </div>
+
+    <!-- 原图编辑工具 -->
+    <div id="originalEditTool" class="hidden bg-white p-4 rounded shadow">
+      <h2 class="font-semibold mb-2">原图编辑工具</h2>
+      <div class="mb-4">
+        <p class="text-sm text-gray-600 mb-2">选择工具和颜色，然后在原图上操作</p>
+        <div class="flex mb-2">
+          <button id="originalBrushBtn" class="tool-button active">画笔工具</button>
+          <button id="originalLassoBtn" class="tool-button">套索工具</button>
+          <button id="originalFillBtn" class="tool-button">填充工具</button>
+        </div>
+        <div class="slider-container mb-2">
+          <span class="text-sm">填充容差:</span>
+          <input type="range" id="toleranceSlider" min="0" max="100" value="30" class="flex-1">
+          <span id="toleranceValue" class="slider-value">30</span>
+        </div>
+        <div class="brush-size-selector">
+          <span class="brush-size-label">画笔大小:</span>
+          <input type="number" id="brushSizeOriginal" min="1" max="100" value="10" class="brush-size-input">
+          <span>像素</span>
+        </div>
+        <div id="availableColorsOriginal" class="flex flex-wrap gap-2"></div>
+      </div>
+      <div class="flex gap-4">
+        <button id="clearOriginalSelectionBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm hidden">清除选区</button>
+        <button id="undoOriginalBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm" disabled>撤销</button>
+        <button id="resetOriginalBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm">重置</button>
+        <button id="nextStepBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">下一步：选择色系</button>
+      </div>
+    </div>
+
+    <!-- 色系与工艺选择 -->
+    <div id="configSelection" class="hidden grid grid-cols-1 md:grid-cols-2 gap-4 bg-white p-4 rounded shadow">
+      <!-- 色系选择 -->
+      <div id="colorSelection" class="space-y-2">
+        <h2 class="font-semibold">选择主颜色系：</h2>
+        <div class="flex flex-wrap gap-x-4 gap-y-2">
+          <label class="flex items-center space-x-2">
+            <input type="radio" name="mainColor" value="blue" class="accent-blue-600">
+            <span>蓝色系</span>
+          </label>
+          <label class="flex items-center space-x-2">
+            <input type="radio" name="mainColor" value="red" class="accent-red-600">
+            <span>红色系</span>
+          </label>
+          <label class="flex items-center space-x-2">
+            <input type="radio" name="mainColor" value="purple" class="accent-purple-600">
+            <span>紫色系</span>
+          </label>
+          <label class="flex items-center space-x-2">
+            <input type="radio" name="mainColor" value="white" class="accent-gray-400">
+            <span>白色系 (黑色丝印)</span>
+          </label>
+          <label class="flex items-center space-x-2">
+            <input type="radio" name="mainColor" value="black" class="accent-black">
+            <span>黑色系</span>
+          </label>
+          <label class="flex items-center space-x-2">
+            <input type="radio" name="mainColor" value="yellow" class="accent-yellow-500">
+            <span>黄色系</span>
+          </label>
+          <label class="flex items-center space-x-2">
+            <input type="radio" name="mainColor" value="green" class="accent-green-600">
+            <span>绿色系</span>
+          </label>
+        </div>
+      </div>
+      <!-- 表面处理工艺 -->
+      <div id="surfaceFinishSelection" class="space-y-2">
+        <h2 class="font-semibold">选择表面处理工艺：</h2>
+        <div class="flex flex-wrap gap-x-4 gap-y-2">
+            <label class="flex items-center space-x-2">
+              <input type="radio" name="surfaceFinish" value="hasl" checked class="accent-gray-500">
+              <span>喷锡 (银色)</span>
+            </label>
+            <label class="flex items-center space-x-2">
+              <input type="radio" name="surfaceFinish" value="enig" class="accent-yellow-500">
+              <span>沉金 (金色)</span>
+            </label>
+        </div>
+        <div class="slider-container mt-2">
+          <span class="text-sm">金属色检测容差:</span>
+          <input type="range" id="detectionToleranceSlider" min="0" max="100" value="25" class="flex-1">
+          <span id="detectionToleranceValue" class="slider-value">25</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 简化图编辑工具 -->
+    <div id="simplifiedEditTool" class="hidden bg-white p-4 rounded shadow">
+      <h2 class="font-semibold mb-2">简化图编辑工具</h2>
+      <div class="mb-4">
+        <p class="text-sm text-gray-600 mb-2">选择工具和颜色，然后在简化图上操作</p>
+        <div class="flex mb-2">
+          <button id="simplifiedBrushBtn" class="tool-button active">画笔工具</button>
+          <button id="simplifiedLassoBtn" class="tool-button">套索工具</button>
+          <button id="simplifiedFillBtn" class="tool-button">填充工具</button>
+        </div>
+        <div class="brush-size-selector">
+          <span class="brush-size-label">画笔大小:</span>
+          <input type="number" id="brushSizeSimplified" min="1" max="100" value="10" class="brush-size-input">
+          <span>像素</span>
+        </div>
+        <div id="availableColorsSimplified" class="flex flex-wrap gap-2"></div>
+      </div>
+      <div class="flex gap-4">
+        <button id="clearSimplifiedSelectionBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm hidden">清除选区</button>
+        <button id="undoSimplifiedBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm" disabled>撤销</button>
+        <button id="resetSimplifiedBtn" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm">重置</button>
+        <button id="generateBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">一键生成</button>
+      </div>
+    </div>
+
+    <!-- 提示 -->
+    <div id="toast" class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-black text-white px-4 py-2 rounded shadow opacity-0 fade text-sm z-50"></div>
+
+    <!-- 原图与简化图 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="bg-white rounded shadow p-4 canvas-container">
+        <h2 class="font-semibold mb-2">原图 <span class="text-sm font-normal">(点击图片可修改颜色)</span></h2>
+        <div class="relative w-full">
+          <canvas id="originalCanvas" class="w-full border rounded cursor-crosshair"></canvas>
+          <canvas id="originalPathPreview" class="path-preview w-full border border-transparent rounded"></canvas>
+        </div>
+      </div>
+      <div class="bg-white rounded shadow p-4 canvas-container">
+        <h2 class="font-semibold mb-2">简化图 <span class="text-sm font-normal">(点击图片可修改颜色)</span></h2>
+        <div class="relative w-full">
+          <canvas id="simplifiedCanvas" class="w-full border rounded cursor-crosshair"></canvas>
+          <canvas id="simplifiedPathPreview" class="path-preview w-full border border-transparent rounded"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- 遮罩图层 -->
+    <div id="maskContainer" class="hidden bg-white rounded shadow p-4">
+      <h2 class="text-lg font-semibold mb-4">遮罩图层</h2>
+      <div id="masks" class="flex flex-wrap gap-4"></div>
+    </div>
+
+    <!-- 合成图层 -->
+    <div id="layerContainer" class="hidden bg-white rounded shadow p-4">
+      <h2 class="text-lg font-semibold mb-4">合成图层</h2>
+      <div id="layers" class="flex flex-wrap gap-4"></div>
+    </div>
+
+    <!-- 实物预览图 -->
+    <div id="previewContainer" class="hidden bg-white rounded shadow p-4">
+      <h2 class="text-lg font-semibold mb-4">实物预览图</h2>
+      <div id="preview" class="flex flex-wrap gap-4">
+        <canvas id="previewCanvas" class="w-full border rounded max-w-md"></canvas>
+      </div>
+    </div>
+
+    <!-- 返回修改按钮 -->
+    <div id="backToEditContainer" class="hidden bg-white p-4 rounded shadow text-center">
+      <button id="backToOriginalBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded mr-4">返回修改原图</button>
+      <button id="backToSimplifiedBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">返回修改简化图</button>
+    </div>
+
+    <!-- 自定义文件名输入框 -->
+    <div class="bg-white p-4 rounded shadow">
+      <h2 class="font-semibold">自定义下载文件名：</h2>
+      <input type="text" id="customFilename" class="w-full p-2 border rounded" placeholder="请输入自定义文件名">
+    </div>
+
+    <!-- 保留底部下载按钮 -->
+    <div class="text-center mt-4">
+      <button id="downloadAllBtn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded">一键下载所有图片</button>
+    </div>
+  </div>
+
+  <footer class="text-center text-sm text-gray-500 py-4 mt-8 border-t border-gray-200">
+    <p>
+      由 B 站 UP 主 <a href="https://space.bilibili.com/1031031979" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">不是孙小华呀</a> 制作
+    </p>
+    <p class="mt-1">
+      <a href="https://space.bilibili.com/1775976544" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">星辉棉花</a> 通过 Gemini 修改并上传至 Cloudflare Pages
+    </p>
+  </footer>
+
+  <script>
+    // 常量定义
+    const TOOLS = { BRUSH: 'brush', LASSO: 'lasso', FILL: 'fill' };
+    const MAX_COLOR_DISTANCE = Math.sqrt(255 ** 2 * 3); // ~441.67
+    const COLOR_SCHEMES = {
+      blue: {
+        '深蓝': [22, 31, 125], '浅蓝': [93, 167, 227], '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149], '黑色': [6, 16, 8], '白色': [230, 234, 235]
+      },
+      red: {
+        '深红': [125, 22, 22], '浅红': [227, 93, 93], '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149], '黑色': [6, 16, 8], '白色': [230, 234, 235]
+      },
+      purple: {
+        '深紫': [125, 22, 125], '浅紫': [227, 93, 227], '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149], '黑色': [6, 16, 8], '白色': [230, 234, 235]
+      },
+      white: {
+        '深灰': [100, 100, 100], '浅灰': [200, 200, 200], '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149], '黑色': [10, 10, 10], '白色': [0, 0, 0]
+      },
+      black: {
+        '深灰': [30, 30, 30], '浅灰': [80, 80, 80], '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149], '银色': [160, 160, 160], '白色': [230, 234, 235]
+      },
+      yellow: {
+        '暗黄': [218, 165, 32], '亮黄': [255, 215, 0], '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149], '黑色': [6, 16, 8], '白色': [230, 234, 235]
+      },
+      green: {
+        '暗绿': [0, 100, 0], '亮绿': [34, 139, 34], '深绿': [25, 53, 34],
+        '浅绿': [249, 225, 149], '黑色': [6, 16, 8], '白色': [230, 234, 235]
+      }
+    };
+    const DETECTION_COLORS = {
+      silver: [192, 192, 192],
+      gold: [255, 215, 0]
+    };
+    const REPLACE_COLORS = {
+      '深蓝': [22, 31, 125], '浅蓝': [93, 167, 227], '深红': [125, 22, 22], '浅红': [227, 93, 93],
+      '深紫': [125, 22, 125], '浅紫': [227, 93, 227], '深绿': [25, 53, 34], '浅绿': [249, 225, 149],
+      '黑色': [6, 16, 8], '白色': [230, 234, 235], '深灰': [100, 100, 100], '浅灰': [200, 200, 200],
+      '白色(黑丝印)': [0, 0, 0], '黑色(白板)': [10, 10, 10], '深灰(黑板)': [30, 30, 30], '浅灰(黑板)': [80, 80, 80],
+      '银色': [160, 160, 160], '暗黄': [218, 165, 32], '亮黄': [255, 215, 0], '暗绿': [0, 100, 0], '亮绿': [34, 139, 34],
+    };
+    const RENAME_MAP = {
+      '正面铜皮层': '放在顶层', '白色': '放在顶层丝印层', '正面阻焊层': '放在顶层阻焊层',
+      '深蓝': '放在底层注意镜像', '深红': '放在底层注意镜像', '深紫': '放在底层注意镜像',
+      '深灰': '放在底层注意镜像', '暗黄': '放在底层注意镜像', '暗绿': '放在底层注意镜像',
+      '背面阻焊层': '放在底层阻焊层注意镜像'
+    };
+
+    class PCBImageProcessor {
+      constructor() {
+        this.image = null;
+        this.currentColorScheme = {};
+        this.simplifiedImageData = null;
+        this.originalEditHistory = [];
+        this.simplifiedEditHistory = [];
+        this.maskList = [];
+        this.selectedOriginalColor = null;
+        this.selectedSimplifiedColor = null;
+        this.currentTolerance = 30;
+        this.detectionTolerance = 25;
+        this.brushSizeOriginal = 10;
+        this.brushSizeSimplified = 10;
+        this.isPaintingOriginal=false; this.lastPointOriginal={x:0,y:0}; this.isPaintingSimplified=false; this.lastPointSimplified={x:0,y:0}; this.isDrawingLassoOriginal=false; this.isDrawingLassoSimplified=false; this.lassoPointsOriginal=[]; this.lassoPointsSimplified=[];
+        this.toolOriginal = 'brush'; this.toolSimplified = 'brush';
+        this.surfaceFinish = 'hasl';
+        this.initElements();
+        this.setupEventListeners();
+      }
+      initElements(){this.uploader=document.getElementById('uploader');this.dropArea=document.getElementById('drop-area');this.originalCanvas=document.getElementById('originalCanvas');this.simplifiedCanvas=document.getElementById('simplifiedCanvas');this.originalPathPreview=document.getElementById('originalPathPreview');this.simplifiedPathPreview=document.getElementById('simplifiedPathPreview');this.masksContainer=document.getElementById('masks');this.layersContainer=document.getElementById('layers');this.toast=document.getElementById('toast');this.imgInfo=document.getElementById('img-info');this.originalEditTool=document.getElementById('originalEditTool');this.simplifiedEditTool=document.getElementById('simplifiedEditTool');this.availableColorsOriginal=document.getElementById('availableColorsOriginal');this.availableColorsSimplified=document.getElementById('availableColorsSimplified');this.undoOriginalBtn=document.getElementById('undoOriginalBtn');this.resetOriginalBtn=document.getElementById('resetOriginalBtn');this.nextStepBtn=document.getElementById('nextStepBtn');this.undoSimplifiedBtn=document.getElementById('undoSimplifiedBtn');this.resetSimplifiedBtn=document.getElementById('resetSimplifiedBtn');this.generateBtn=document.getElementById('generateBtn');this.maskContainer=document.getElementById('maskContainer');this.layerContainer=document.getElementById('layerContainer');this.previewContainer=document.getElementById('previewContainer');this.toleranceSlider=document.getElementById('toleranceSlider');this.toleranceValue=document.getElementById('toleranceValue');this.detectionToleranceSlider=document.getElementById('detectionToleranceSlider');this.detectionToleranceValue=document.getElementById('detectionToleranceValue');this.brushSizeOriginalInput=document.getElementById('brushSizeOriginal');this.brushSizeSimplifiedInput=document.getElementById('brushSizeSimplified');this.downloadAllBtn=document.getElementById('downloadAllBtn');this.backToEditContainer=document.getElementById('backToEditContainer');this.backToOriginalBtn=document.getElementById('backToOriginalBtn');this.backToSimplifiedBtn=document.getElementById('backToSimplifiedBtn');this.originalBrushBtn=document.getElementById('originalBrushBtn');this.originalLassoBtn=document.getElementById('originalLassoBtn');this.originalFillBtn=document.getElementById('originalFillBtn');this.simplifiedBrushBtn=document.getElementById('simplifiedBrushBtn');this.simplifiedLassoBtn=document.getElementById('simplifiedLassoBtn');this.simplifiedFillBtn=document.getElementById('simplifiedFillBtn');this.clearOriginalSelectionBtn=document.getElementById('clearOriginalSelectionBtn');this.clearSimplifiedSelectionBtn=document.getElementById('clearSimplifiedSelectionBtn');this.configSelection=document.getElementById('configSelection');}
+      setupEventListeners(){this.dropArea.addEventListener('click',()=>this.uploader.click());this.dropArea.addEventListener('dragover',e=>{e.preventDefault();this.dropArea.classList.add('bg-blue-100');});this.dropArea.addEventListener('dragleave',()=>this.dropArea.classList.remove('bg-blue-100'));this.dropArea.addEventListener('drop',e=>{e.preventDefault();this.dropArea.classList.remove('bg-blue-100');this.handleImageUpload(e.dataTransfer.files[0]);});this.uploader.addEventListener('change',e=>this.handleImageUpload(e.target.files[0]));this.toleranceSlider.addEventListener('input',()=>{this.currentTolerance=parseInt(this.toleranceSlider.value);this.toleranceValue.textContent=this.currentTolerance;});this.detectionToleranceSlider.addEventListener('input',()=>{this.detectionTolerance=parseInt(this.detectionToleranceSlider.value);this.detectionToleranceValue.textContent=this.detectionTolerance;});this.detectionToleranceSlider.addEventListener('change',()=>{if(this.simplifiedImageData){this.initialProcessPCB();}});this.brushSizeOriginalInput.addEventListener('input',()=>{this.brushSizeOriginal=parseInt(this.brushSizeOriginalInput.value)||10;});this.brushSizeSimplifiedInput.addEventListener('input',()=>{this.brushSizeSimplified=parseInt(this.brushSizeSimplifiedInput.value)||10;});this.undoOriginalBtn.addEventListener('click',()=>this.undoOriginal());this.resetOriginalBtn.addEventListener('click',()=>this.resetOriginal());this.nextStepBtn.addEventListener('click',()=>this.nextStep());this.undoSimplifiedBtn.addEventListener('click',()=>this.undoSimplified());this.resetSimplifiedBtn.addEventListener('click',()=>this.resetSimplified());this.generateBtn.addEventListener('click',()=>this.generate());this.downloadAllBtn.addEventListener('click',()=>this.downloadAllAsZip());this.backToOriginalBtn.addEventListener('click',()=>this.backToOriginal());this.backToSimplifiedBtn.addEventListener('click',()=>this.backToSimplified());this.clearOriginalSelectionBtn.addEventListener('click',()=>this.clearOriginalSelection());this.clearSimplifiedSelectionBtn.addEventListener('click',()=>this.clearSimplifiedSelection());this.originalBrushBtn.addEventListener('click',()=>this.setOriginalTool(TOOLS.BRUSH));this.originalLassoBtn.addEventListener('click',()=>this.setOriginalTool(TOOLS.LASSO));this.originalFillBtn.addEventListener('click',()=>this.setOriginalTool(TOOLS.FILL));this.simplifiedBrushBtn.addEventListener('click',()=>this.setSimplifiedTool(TOOLS.BRUSH));this.simplifiedLassoBtn.addEventListener('click',()=>this.setSimplifiedTool(TOOLS.LASSO));this.simplifiedFillBtn.addEventListener('click',()=>this.setSimplifiedTool(TOOLS.FILL));document.querySelectorAll('input[name="mainColor"]').forEach(input=>{input.addEventListener('change',()=>{if(input.checked){this.currentColorScheme=COLOR_SCHEMES[input.value];this.initialProcessPCB();}});});document.querySelectorAll('input[name="surfaceFinish"]').forEach(input=>{input.addEventListener('change',()=>{if(input.checked){this.surfaceFinish=input.value;if(this.simplifiedImageData){this.initialProcessPCB();}}});});}
+      getCanvasCoordinates(canvas,clientX,clientY){const rect=canvas.getBoundingClientRect();return{x:Math.floor((clientX-rect.left)*(canvas.width/rect.width)),y:Math.floor((clientY-rect.top)*(canvas.height/rect.height))};}
+      setOriginalTool(tool){this.toolOriginal=tool;this.originalBrushBtn.classList.toggle('active',tool===TOOLS.BRUSH);this.originalLassoBtn.classList.toggle('active',tool===TOOLS.LASSO);this.originalFillBtn.classList.toggle('active',tool===TOOLS.FILL);this.originalCanvas.style.cursor=tool===TOOLS.FILL?'cell':'crosshair';this.clearOriginalSelectionBtn.classList.toggle('hidden',tool!==TOOLS.LASSO);}
+      setSimplifiedTool(tool){this.toolSimplified=tool;this.simplifiedBrushBtn.classList.toggle('active',tool===TOOLS.BRUSH);this.simplifiedLassoBtn.classList.toggle('active',tool===TOOLS.LASSO);this.simplifiedFillBtn.classList.toggle('active',tool===TOOLS.FILL);this.simplifiedCanvas.style.cursor=tool===TOOLS.FILL?'cell':'crosshair';this.clearSimplifiedSelectionBtn.classList.toggle('hidden',tool!==TOOLS.LASSO);}
+      clearOriginalSelection(){this.lassoPointsOriginal=[];this.originalPathPreview.getContext('2d').clearRect(0,0,this.originalPathPreview.width,this.originalPathPreview.height);}
+      clearSimplifiedSelection(){this.lassoPointsSimplified=[];this.simplifiedPathPreview.getContext('2d').clearRect(0,0,this.simplifiedPathPreview.width,this.simplifiedPathPreview.height);}
+      showToast(msg){this.toast.innerText=msg;this.toast.style.opacity=1;setTimeout(()=>{this.toast.style.opacity=0;},2000);}
+      async handleImageUpload(file){this.showToast('正在压缩图片...');if(!file.type.startsWith('image/')){this.showToast('请上传有效的图像文件');return;}
+try{const compressed=await imageCompression(file,{maxSizeMB:2,maxWidthOrHeight:1500,useWebWorker:true});const reader=new FileReader();reader.onload=e=>{this.image=new Image();this.image.onload=()=>{this.originalCanvas.width=this.simplifiedCanvas.width=this.image.width;this.originalCanvas.height=this.simplifiedCanvas.height=this.image.height;this.originalPathPreview.width=this.simplifiedPathPreview.width=this.image.width;this.originalPathPreview.height=this.simplifiedPathPreview.height=this.image.height;this.originalCanvas.getContext("2d").drawImage(this.image,0,0);this.imgInfo.innerText=`尺寸：${this.image.width}x${this.image.height}，大小：${(compressed.size/1024/1024).toFixed(2)} MB`;this.originalEditTool.classList.remove('hidden');this.setupOriginalColorPicker();this.setupCanvasHandlers('original');this.originalEditHistory=[];this.simplifiedEditHistory=[];this.maskList=[];this.maskContainer.classList.add('hidden');this.layerContainer.classList.add('hidden');this.previewContainer.classList.add('hidden');this.backToEditContainer.classList.add('hidden');this.configSelection.classList.add('hidden');this.simplifiedEditTool.classList.add('hidden');this.simplifiedImageData=null;this.setOriginalTool(TOOLS.BRUSH);this.setSimplifiedTool(TOOLS.BRUSH);};this.image.src=e.target.result;};reader.readAsDataURL(compressed);}catch(error){this.showToast('图片处理出错: '+error.message);}}
+      setupOriginalColorPicker(){this.availableColorsOriginal.innerHTML='';Object.entries(REPLACE_COLORS).forEach(([name,color])=>{const colorDiv=document.createElement('div');colorDiv.className='color-picker';colorDiv.style.backgroundColor=`rgb(${color.join(',')})`;colorDiv.title=name;colorDiv.addEventListener('click',()=>{document.querySelectorAll('#availableColorsOriginal .color-picker').forEach(el=>el.classList.remove('selected'));colorDiv.classList.add('selected');this.selectedOriginalColor=color;});this.availableColorsOriginal.appendChild(colorDiv);});const firstColorPicker=this.availableColorsOriginal.querySelector('.color-picker');if(firstColorPicker)firstColorPicker.click();}
+      setupCanvasHandlers(type){const isOriginal=type==='original';const canvas=isOriginal?this.originalCanvas:this.simplifiedCanvas;const previewCanvas=isOriginal?this.originalPathPreview:this.simplifiedPathPreview;const getState=prop=>this[prop+(isOriginal?'Original':'Simplified')];const setState=(prop,value)=>{this[prop+(isOriginal?'Original':'Simplified')]=value;};canvas.onmousedown=e=>{const selectedColor=isOriginal?this.selectedOriginalColor:this.selectedSimplifiedColor;if(!selectedColor){this.showToast('请先选择一种颜色');return;}
+isOriginal?this.saveOriginalCanvasState():this.saveSimplifiedCanvasState();const{x,y}=this.getCanvasCoordinates(canvas,e.clientX,e.clientY);const currentTool=getState('tool');if(currentTool===TOOLS.BRUSH){setState('isPainting',true);setState('lastPoint',{x,y});isOriginal?this.paintOriginalBrush(x,y,x,y):this.paintSimplifiedBrush(x,y,x,y);}else if(currentTool===TOOLS.LASSO){setState('isDrawingLasso',true);setState('lassoPoints',[[x,y]]);const ctx=previewCanvas.getContext('2d');ctx.clearRect(0,0,previewCanvas.width,previewCanvas.height);ctx.strokeStyle='rgba(0,0,255,0.5)';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x,y);ctx.stroke();}else if(currentTool===TOOLS.FILL){isOriginal?this.fillOriginalArea(x,y):this.fillSimplifiedArea(x,y);}};canvas.onmousemove=e=>{const{x,y}=this.getCanvasCoordinates(canvas,e.clientX,e.clientY);if(getState('isPainting')){const lastPoint=getState('lastPoint');isOriginal?this.paintOriginalBrush(lastPoint.x,lastPoint.y,x,y):this.paintSimplifiedBrush(lastPoint.x,lastPoint.y,x,y);setState('lastPoint',{x,y});}else if(getState('isDrawingLasso')){const lassoPoints=getState('lassoPoints');lassoPoints.push([x,y]);const ctx=previewCanvas.getContext('2d');ctx.clearRect(0,0,previewCanvas.width,previewCanvas.height);ctx.beginPath();ctx.moveTo(lassoPoints[0][0],lassoPoints[0][1]);for(let i=1;i<lassoPoints.length;i++){ctx.lineTo(lassoPoints[i][0],lassoPoints[i][1]);}
+ctx.stroke();}};const stopDrawing=()=>{setState('isPainting',false);if(getState('isDrawingLasso')){setState('isDrawingLasso',false);if(getState('lassoPoints').length>2){isOriginal?this.modifyOriginalLassoArea():this.modifySimplifiedLassoArea();}
+isOriginal?this.clearOriginalSelection():this.clearSimplifiedSelection();}
+if(!isOriginal){this.simplifiedImageData=this.simplifiedCanvas.getContext('2d').getImageData(0,0,this.simplifiedCanvas.width,this.simplifiedCanvas.height);}};canvas.onmouseup=stopDrawing;canvas.onmouseleave=stopDrawing;}
+      paintOriginalBrush(x1,y1,x2,y2){const ctx=this.originalCanvas.getContext('2d');ctx.strokeStyle=`rgb(${this.selectedOriginalColor.join(',')})`;ctx.lineWidth=this.brushSizeOriginal;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
+      modifyOriginalLassoArea(){const ctx=this.originalCanvas.getContext('2d');ctx.fillStyle=`rgb(${this.selectedOriginalColor.join(',')})`;ctx.beginPath();ctx.moveTo(this.lassoPointsOriginal[0][0],this.lassoPointsOriginal[0][1]);for(let i=1;i<this.lassoPointsOriginal.length;i++){ctx.lineTo(this.lassoPointsOriginal[i][0],this.lassoPointsOriginal[i][1]);}
+ctx.closePath();ctx.fill();}
+      fillOriginalArea(x,y){const ctx=this.originalCanvas.getContext('2d');const targetColor=ctx.getImageData(x,y,1,1).data;const fillColor=this.selectedOriginalColor;if(fillColor[0]===targetColor[0]&&fillColor[1]===targetColor[1]&&fillColor[2]===targetColor[2])return;const imageData=ctx.getImageData(0,0,this.originalCanvas.width,this.originalCanvas.height);const visited=new Uint8Array(imageData.width,imageData.height);const queue=[[x,y]];while(queue.length>0){const[cx,cy]=queue.shift();if(cx<0||cx>=imageData.width||cy<0||cy>=imageData.height||visited[cy*imageData.width+cx])continue;const i=(cy*imageData.width+cx)*4;const[r,g,b]=[imageData.data[i],imageData.data[i+1],imageData.data[i+2]];if(Math.hypot(r-targetColor[0],g-targetColor[1],b-targetColor[2])<=this.currentTolerance){imageData.data.set(fillColor,i);visited[cy*imageData.width+cx]=1;queue.push([cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]);}}
+ctx.putImageData(imageData,0,0);}
+      saveOriginalCanvasState(){this.originalEditHistory.push(this.originalCanvas.getContext('2d').getImageData(0,0,this.originalCanvas.width,this.originalCanvas.height));this.undoOriginalBtn.disabled=false;}
+      undoOriginal(){if(this.originalEditHistory.length>0){this.originalCanvas.getContext('2d').putImageData(this.originalEditHistory.pop(),0,0);this.undoOriginalBtn.disabled=this.originalEditHistory.length===0;}}
+      resetOriginal(){if(confirm('确定要重置所有修改吗？')){this.originalCanvas.getContext('2d').drawImage(this.image,0,0);this.originalEditHistory=[];this.undoOriginalBtn.disabled=true;this.clearOriginalSelection();}}
+      nextStep(){this.configSelection.classList.remove('hidden');this.originalEditTool.classList.add('hidden');if(!document.querySelector('input[name="mainColor"]:checked')){document.querySelector('input[name="mainColor"][value="blue"]').click();}}
+      setupSimplifiedColorPicker(){this.availableColorsSimplified.innerHTML='';Object.entries(this.currentColorScheme).forEach(([name,color])=>{const colorDiv=document.createElement('div');colorDiv.className='color-picker';colorDiv.style.backgroundColor=`rgb(${color.join(',')})`;colorDiv.title=name;colorDiv.addEventListener('click',()=>{document.querySelectorAll('#availableColorsSimplified .color-picker').forEach(el=>el.classList.remove('selected'));colorDiv.classList.add('selected');this.selectedSimplifiedColor=name;});this.availableColorsSimplified.appendChild(colorDiv);});const firstColorPicker=this.availableColorsSimplified.querySelector('.color-picker');if(firstColorPicker)firstColorPicker.click();}
+      paintSimplifiedBrush(x1,y1,x2,y2){const ctx=this.simplifiedCanvas.getContext('2d');const color=this.currentColorScheme[this.selectedSimplifiedColor];ctx.strokeStyle=`rgb(${color.join(',')})`;ctx.lineWidth=this.brushSizeSimplified;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
+      modifySimplifiedLassoArea(){const ctx=this.simplifiedCanvas.getContext('2d');const color=this.currentColorScheme[this.selectedSimplifiedColor];ctx.fillStyle=`rgb(${color.join(',')})`;ctx.beginPath();ctx.moveTo(this.lassoPointsSimplified[0][0],this.lassoPointsSimplified[0][1]);for(let i=1;i<this.lassoPointsSimplified.length;i++){ctx.lineTo(this.lassoPointsSimplified[i][0],this.lassoPointsSimplified[i][1]);}
+ctx.closePath();ctx.fill();}
+      fillSimplifiedArea(x,y){const ctx=this.simplifiedCanvas.getContext('2d');const targetColor=ctx.getImageData(x,y,1,1).data;const newColor=this.currentColorScheme[this.selectedSimplifiedColor];if(targetColor[0]===newColor[0]&&targetColor[1]===newColor[1]&&targetColor[2]===newColor[2])return;const imageData=ctx.getImageData(0,0,this.simplifiedCanvas.width,this.simplifiedCanvas.height);const queue=[[x,y]];const visited=new Set([`${x},${y}`]);while(queue.length>0){const[cx,cy]=queue.shift();const i=(cy*imageData.width+cx)*4;if(imageData.data[i]===targetColor[0]&&imageData.data[i+1]===targetColor[1]&&imageData.data[i+2]===targetColor[2]){imageData.data.set(newColor,i);const neighbors=[[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]];for(const[nx,ny]of neighbors){if(nx>=0&&nx<imageData.width&&ny>=0&&ny<imageData.height&&!visited.has(`${nx},${ny}`)){visited.add(`${nx},${ny}`);queue.push([nx,ny]);}}}}
+ctx.putImageData(imageData,0,0);}
+      saveSimplifiedCanvasState(){this.simplifiedEditHistory.push(this.simplifiedCanvas.getContext('2d').getImageData(0,0,this.simplifiedCanvas.width,this.simplifiedCanvas.height));this.undoSimplifiedBtn.disabled=false;}
+      undoSimplified(){if(this.simplifiedEditHistory.length>0){const prevState=this.simplifiedEditHistory.pop();this.simplifiedCanvas.getContext('2d').putImageData(prevState,0,0);this.simplifiedImageData=prevState;this.undoSimplifiedBtn.disabled=this.simplifiedEditHistory.length===0;}}
+      resetSimplified(){if(confirm('确定要重置所有修改吗？')){this.initialProcessPCB();this.simplifiedEditHistory=[];this.undoSimplifiedBtn.disabled=true;this.clearSimplifiedSelection();}}
+      getExposedCopperColorName(){return document.querySelector('input[name="mainColor"]:checked').value==='black'?'银色':'黑色';}
+      initialProcessPCB(){
+    this.showToast('正在生成简化图像...');
+    document.body.style.cursor = 'wait';
+    this.generateBtn.disabled = true;
+
+    setTimeout(() => {
+        const w = this.originalCanvas.width, h = this.originalCanvas.height;
+        const data = this.originalCanvas.getContext('2d').getImageData(0, 0, w, h);
+        const simplifiedCtx = this.simplifiedCanvas.getContext('2d');
+        this.simplifiedImageData = simplifiedCtx.createImageData(w, h);
+        const exposedCopperName = this.getExposedCopperColorName();
+        const exposedCopperColor = this.currentColorScheme[exposedCopperName];
+        const detectionColor = this.surfaceFinish === 'enig' ? DETECTION_COLORS.gold : DETECTION_COLORS.silver;
+        
+        const normalizedTolerance = this.detectionTolerance / 100;
+        const toleranceThreshold = (normalizedTolerance ** 2) * MAX_COLOR_DISTANCE;
+
+        for (let i = 0; i < data.data.length; i += 4) {
+            const pixel = [data.data[i], data.data[i + 1], data.data[i + 2]];
+            let override = false;
+            const detectionDist = Math.hypot(detectionColor[0] - pixel[0], detectionColor[1] - pixel[1], detectionColor[2] - pixel[2]);
+
+            if (detectionDist < toleranceThreshold) {
+                this.simplifiedImageData.data.set([...exposedCopperColor, 255], i);
+                override = true;
+            }
+
+            if (!override) {
+                let closest = '白色', minDist = Infinity;
+                for (const [name, color] of Object.entries(this.currentColorScheme)) {
+                    const d = Math.hypot(color[0] - pixel[0], color[1] - pixel[1], color[2] - pixel[2]);
+                    if (d < minDist) {
+                        minDist = d;
+                        closest = name;
+                    }
+                }
+                this.simplifiedImageData.data.set([...this.currentColorScheme[closest], 255], i);
+            }
+        }
+        simplifiedCtx.putImageData(this.simplifiedImageData, 0, 0);
+        this.setupSimplifiedColorPicker();
+        this.simplifiedEditTool.classList.remove('hidden');
+        this.setupCanvasHandlers('simplified');
+
+        document.body.style.cursor = 'default';
+        this.generateBtn.disabled = false;
+        this.showToast('简化图像已生成');
+    }, 10);
+}
+      generate(){this.showToast('正在生成遮罩和图层...');document.body.style.cursor='wait';this.generateBtn.disabled=true;this.backToOriginalBtn.disabled=true;this.backToSimplifiedBtn.disabled=true;setTimeout(()=>{this.simplifiedEditTool.classList.add('hidden');this.maskContainer.classList.remove('hidden');this.layerContainer.classList.remove('hidden');this.previewContainer.classList.remove('hidden');this.backToEditContainer.classList.remove('hidden');this.processPCB();document.body.style.cursor='default';this.generateBtn.disabled=false;this.backToOriginalBtn.disabled=false;this.backToSimplifiedBtn.disabled=false;this.showToast('处理完成');},10);}
+      backToOriginal(){this.maskContainer.classList.add('hidden');this.layerContainer.classList.add('hidden');this.previewContainer.classList.add('hidden');this.backToEditContainer.classList.add('hidden');this.originalEditTool.classList.remove('hidden');this.showToast('已返回原图编辑模式');}
+      backToSimplified(){this.maskContainer.classList.add('hidden');this.layerContainer.classList.add('hidden');this.previewContainer.classList.add('hidden');this.backToEditContainer.classList.add('hidden');this.simplifiedEditTool.classList.remove('hidden');this.showToast('已返回简化图编辑模式');}
+      processPCB(){const w=this.simplifiedCanvas.width,h=this.simplifiedCanvas.height;const data=this.simplifiedImageData;this.maskList=[];const buffers={};for(const name in this.currentColorScheme){buffers[name]=new Uint8ClampedArray(w*h*4);}
+for(let i=0;i<data.data.length;i+=4){const pixel=[data.data[i],data.data[i+1],data.data[i+2]];for(const[name,color]of Object.entries(this.currentColorScheme)){if(pixel[0]===color[0]&&pixel[1]===color[1]&&pixel[2]===color[2]){buffers[name].set([...color,255],i);break;}}}
+this.masksContainer.innerHTML='';for(const[name,buffer]of Object.entries(buffers)){const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d');ctx.putImageData(new ImageData(buffer,w,h),0,0);this.addCornerMarkers(ctx,w,h);const img=document.createElement('img');img.src=canvas.toDataURL();img.className="w-24 h-24 rounded border hover:shadow cursor-pointer";img.title=name;img.onclick=()=>this.downloadImage(img.src,`${name}_mask.png`);this.masksContainer.appendChild(img);this.maskList.push({name,canvas,dataURL:img.src});}
+this.generateLayers();this.generatePreview();}
+      addCornerMarkers(ctx,width,height){ctx.fillStyle='red';ctx.fillRect(0,0,1,1);ctx.fillRect(width-1,0,1,1);ctx.fillRect(0,height-1,1,1);ctx.fillRect(width-1,height-1,1,1);}
+      generateLayers(){const w=this.simplifiedCanvas.width,h=this.simplifiedCanvas.height;this.layersContainer.innerHTML='';const findMaskCanvas=name=>this.maskList.find(m=>m.name===name)?.canvas;const combine=names=>{const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d');names.forEach(n=>{const m=findMaskCanvas(n);if(m)ctx.drawImage(m,0,0);});return canvas;};const currentSchemeValue=document.querySelector('input[name="mainColor"]:checked').value;const exposedCopperName=this.getExposedCopperColorName();let mainColorName;switch(currentSchemeValue){case'black':mainColorName='浅灰';break;case'white':mainColorName='浅灰';break;case'yellow':mainColorName='亮黄';break;case'green':mainColorName='亮绿';break;case'red':mainColorName='浅红';break;case'purple':mainColorName='浅紫';break;default:mainColorName='浅蓝';}
+const layers={'正面阻焊层':combine(['深绿','浅绿',exposedCopperName]),'正面铜皮层':combine([mainColorName,exposedCopperName]),'背面阻焊层':combine(['浅绿'])};for(const[layerName,canvas]of Object.entries(layers)){const img=document.createElement('img');img.src=canvas.toDataURL();img.className="w-24 h-24 rounded border hover:shadow cursor-pointer";img.title=layerName;img.onclick = ()=>this.downloadImage(img.src,`${layerName}.png`);this.layersContainer.appendChild(img);this.maskList.push({name:layerName,canvas,dataURL:img.src});}}
+      generatePreview(){const w=this.simplifiedCanvas.width,h=this.simplifiedCanvas.height;const data=this.simplifiedImageData;const previewCanvas=document.getElementById('previewCanvas');previewCanvas.width=w;previewCanvas.height=h;const previewCtx=previewCanvas.getContext('2d');const previewData=previewCtx.createImageData(w,h);const exposedCopperName=this.getExposedCopperColorName();const exposedCopperColor=this.currentColorScheme[exposedCopperName];const previewMetalColor=this.surfaceFinish==='enig'?[218,175,56]:[160,160,160];for(let i=0;i<data.data.length;i+=4){const[r,g,b]=[data.data[i],data.data[i+1],data.data[i+2]];if(r===exposedCopperColor[0]&&g===exposedCopperColor[1]&&b===exposedCopperColor[2]){previewData.data.set([...previewMetalColor,255],i);}else{previewData.data.set(data.data.slice(i,i+4),i);}}
+previewCtx.putImageData(previewData,0,0);const previewImgContainer=document.getElementById('preview');previewImgContainer.innerHTML='';const previewImg=document.createElement('img');previewImg.src=previewCanvas.toDataURL();previewImg.className="w-24 h-24 rounded border hover:shadow cursor-pointer";previewImg.title="实物预览图";previewImg.onclick = ()=>this.downloadImage(previewImg.src,'实物预览图.png');previewImgContainer.appendChild(previewImg);this.maskList.push({name:'实物预览图',canvas:previewCanvas,dataURL:previewImg.src});}
+      downloadImage(url,filename){const a=document.createElement("a");a.href=url;a.download=filename;a.click();}
+      downloadAllAsZip(){const customFilename=document.getElementById('customFilename').value.trim()||'pcb灯光画';this.showToast('正在打包下载...');const zip=new JSZip();this.maskList.forEach(({name,dataURL})=>{const rename=RENAME_MAP[name]||name;zip.file(`${customFilename}-${rename}.png`,dataURL.split(',')[1],{base64:true});});zip.generateAsync({type:"blob"}).then(blob=>{saveAs(blob,`${customFilename}.zip`);setTimeout(()=>this.showToast('下载完成！'),1000);});}
+    }
+
+    document.addEventListener('DOMContentLoaded', () => new PCBImageProcessor());
+  </script>
+</body>
+</html>
